@@ -21,6 +21,7 @@
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <netdb.h>
+#include <net/if.h>
 #endif
 
 #if defined(__MINGW32__) || defined(__MINGW64__)
@@ -349,8 +350,34 @@ sockaddr_in6 uvgrtp::socket::create_ip6_sockaddr(std::string host, short port)
     memset(&addr, 0, sizeof(addr));
 
     addr.sin6_family = AF_INET6;
-    inet_pton(AF_INET6, host.c_str(), &addr.sin6_addr);
     addr.sin6_port = htons((uint16_t)port);
+
+    // Link-local addresses carry a zone ("fe80::1%eth0"), which inet_pton rejects.
+    std::string zone;
+    size_t pct = host.find('%');
+    if (pct != std::string::npos) {
+        zone = host.substr(pct + 1);
+        host = host.substr(0, pct);
+    }
+
+    if (inet_pton(AF_INET6, host.c_str(), &addr.sin6_addr) != 1) {
+        UVG_LOG_ERROR("Invalid IPv6 address: %s", host.c_str());
+    }
+
+    if (!zone.empty()) {
+        unsigned long idx = 0;
+#ifndef _WIN32
+        idx = if_nametoindex(zone.c_str());
+#endif
+        if (idx == 0) {
+            // Numeric zone, e.g. "fe80::1%2" (the usual form on Windows)
+            idx = strtoul(zone.c_str(), nullptr, 10);
+        }
+        if (idx == 0) {
+            UVG_LOG_ERROR("Unknown IPv6 zone: %s", zone.c_str());
+        }
+        addr.sin6_scope_id = (uint32_t)idx;
+    }
 
     return addr;
 }
